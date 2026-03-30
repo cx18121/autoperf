@@ -2,56 +2,42 @@ import numpy as np
 from game import move, MOVES
 
 
-def evaluate_board(board: np.ndarray) -> float:
-    """
-    Evaluates a given board state based on:
-    1. Number of empty cells (more is better).
-    2. Whether the highest tile is in the top-left corner.
-    """
-    score = 0.0
-
-    # Heuristic 1: Empty cells (more empty cells = more flexibility)
-    # This directly addresses strategy guidance #3.
-    num_empty = np.sum(board == 0)
-    score += num_empty * 10.0  # Assign a weight to empty cells
-
-    # Heuristic 2: Highest tile in top-left corner (corner strategy)
-    # This directly addresses strategy guidance #1.
-    max_tile = np.max(board)
-    if board[0, 0] == max_tile:
-        # Give a significant bonus if the max tile is in the target corner.
-        # The bonus is proportional to the tile's value, making this a strong preference.
-        score += max_tile * 1.0
-
-    return score
-
-
 def choose_move(board: np.ndarray) -> str:
+    """Choose the next move for 2048.
+
+    This version evaluates moves based on the number of empty tiles
+    on the resulting board, prioritizing moves that lead to more empty cells.
+    If multiple moves result in the same number of empty cells, the first
+    encountered move (in MOVES order) is chosen.
+
+    Args:
+        board: 4x4 numpy array of current tile values (0 = empty)
+
+    Returns:
+        One of: "up", "down", "left", "right"
     """
-    Chooses the next move for 2048 using a 1-step lookahead and a board evaluation function.
-    The evaluation prioritizes keeping the highest tile in the top-left corner and
-    maximizing the number of empty cells.
-    """
-    best_score = -np.inf
-    best_move = MOVES[0]  # Initialize with a default move
+
+    def score_board_empty_tiles(current_board: np.ndarray) -> int:
+        """Counts the number of empty tiles (zeros) on the board."""
+        return np.count_nonzero(current_board == 0)
+
+    best_score = -1  # Initialize with a score lower than any possible empty tile count
+    best_move = None
 
     for current_move in MOVES:
-        # Simulate the move without modifying the actual game board
-        new_board, _, changed = move(board, current_move)  # _ ignores score_gained
+        new_board, _, changed = move(board, current_move)
 
-        # Only consider moves that actually change the board.
-        # Moves that don't change the board are effectively invalid or useless for progression.
-        if not changed:
-            continue
+        if changed:  # Only consider moves that actually change the board
+            current_score = score_board_empty_tiles(new_board)
 
-        # Evaluate the resulting board state using our heuristic
-        current_board_score = evaluate_board(new_board)
+            if current_score > best_score:
+                best_score = current_score
+                best_move = current_move
+    
+    # Fallback: if no move changed the board (e.g., game over or only invalid moves),
+    # pick a random move. This should ideally not be reached if the game is not over
+    # and valid moves exist.
+    if best_move is None:
+        return MOVES[np.random.randint(len(MOVES))]
 
-        # If this move leads to a better board state, update our choice
-        if current_board_score > best_score:
-            best_score = current_board_score
-            best_move = current_move
-
-    # In case all moves result in no change (e.g., game over or stuck),
-    # `best_move` would retain its initial default value. This is a safe fallback.
     return best_move
