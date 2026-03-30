@@ -10,7 +10,8 @@ def main() -> None:
     if not path.exists():
         sys.exit(f"No results file at {path}")
 
-    rows = list(csv.DictReader(open(path), delimiter="\t"))
+    with open(path) as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
     if not rows:
         sys.exit("No results to plot.")
 

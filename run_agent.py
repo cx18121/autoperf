@@ -1,16 +1,30 @@
-"""Autoperf agent loop — optimizes bot.py using Ollama."""
+"""Autoperf agent loop — optimizes bot.py using Google Gemini."""
 
-import re, csv, subprocess, sys, json
+import re, csv, subprocess, sys, json, os, time
 from pathlib import Path
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError
 
-MODEL = "deepseek-coder:33b"
-OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "gemini-2.5-flash"
 MAX_ITERATIONS = 20
 BOT_FILE = Path("bot.py")
+BEST_OUTPUT = Path("output/best_bot.py")
 RESULTS_FILE = Path("results.tsv")
 PROGRAM_FILE = Path("program.md")
 ROOT = Path(__file__).parent
+
+
+def get_api_key() -> str:
+    key = os.environ.get("GEMINI_API_KEY")
+    if not key:
+        env_file = ROOT / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("GEMINI_API_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+    if not key:
+        sys.exit("Set GEMINI_API_KEY in .env or environment. Get one free at https://aistudio.google.com/apikey")
+    return key
 
 
 def git(*args: str) -> str:
@@ -47,7 +61,12 @@ def log_result(attempt: int, score: float, delta: float, status: str, summary: s
 
 
 def extract_code(response: str) -> str | None:
+    # Try closed code block first
     m = re.search(r"```(?:python)?\s*\n(.*?)```", response, re.DOTALL)
+    if m:
+        return m.group(1).strip() + "\n"
+    # Handle truncated response — code block opened but never closed
+    m = re.search(r"```(?:python)?\s*\n(.*)", response, re.DOTALL)
     if m:
         return m.group(1).strip() + "\n"
     s = response.strip()
@@ -59,6 +78,35 @@ def first_comment(code: str) -> str:
         if line.strip().startswith("#") and "choose" not in line.lower():
             return line.strip("# ").strip()
     return ""
+
+
+def call_llm(prompt: str) -> str:
+    """Call Gemini API and return the response text."""
+    api_key = get_api_key()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={api_key}"
+
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 16384, "temperature": 0.7, "thinkingConfig": {"thinkingBudget": 1024}},
+    }).encode()
+
+    req = Request(url, method="POST", data=payload, headers={
+        "Content-Type": "application/json",
+    })
+
+    for attempt in range(5):
+        try:
+            with urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read())
+            parts = data["candidates"][0]["content"]["parts"]
+            return "\n".join(p["text"] for p in parts if "text" in p)
+        except HTTPError as e:
+            if e.code == 429 and attempt < 4:
+                wait = 10 * (attempt + 1)
+                print(f"  Rate limited, waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def build_prompt(code: str, best_score: float, history: str) -> str:
@@ -92,6 +140,9 @@ def main() -> None:
     if not RESULTS_FILE.exists():
         RESULTS_FILE.write_text("attempt\tscore\tdelta\tstatus\tsummary\n")
 
+    BEST_OUTPUT.parent.mkdir(exist_ok=True)
+    original_code = BOT_FILE.read_text()
+
     print("Running baseline benchmark...")
     best_score = run_benchmark()
     if best_score < 0:
@@ -104,12 +155,13 @@ def main() -> None:
         current_code = BOT_FILE.read_text()
 
         print(f"  Asking {MODEL}...")
-        prompt = build_prompt(current_code, best_score, get_history())
-        req = Request(OLLAMA_URL, method="POST",
-                      data=json.dumps({"model": MODEL, "prompt": prompt, "stream": False}).encode(),
-                      headers={"Content-Type": "application/json"})
-        with urlopen(req, timeout=600) as resp:
-            response_text = json.loads(resp.read())["response"]
+        try:
+            response_text = call_llm(build_prompt(current_code, best_score, get_history()))
+        except Exception as e:
+            print(f"  API error: {e}")
+            log_result(attempt, best_score, 0.0, "skip", f"API error: {e}")
+            continue
+
         new_code = extract_code(response_text)
         if not new_code:
             print("  Could not extract code. Skipping.")
@@ -135,13 +187,18 @@ def main() -> None:
             git("add", "bot.py")
             git("commit", "-m", f"score: {new_score:.0f} avg ({pct:+.1f}%) — {summary}")
             best_score = new_score
+            BEST_OUTPUT.write_text(new_code)
             log_result(attempt, new_score, delta, "commit", summary)
         else:
             print(f"  REVERT: {new_score:.1f} avg ({pct:+.1f}%) — not better")
             BOT_FILE.write_text(current_code)
             log_result(attempt, new_score, delta, "revert", summary)
 
-    print(f"\nDone. Best: {best_score:.1f} avg score — see {RESULTS_FILE}")
+    # Restore original bot.py
+    BOT_FILE.write_text(original_code)
+    print(f"\nDone. Best: {best_score:.1f} avg score")
+    print(f"Best bot saved to {BEST_OUTPUT}")
+    print(f"Results logged to {RESULTS_FILE}")
 
 
 if __name__ == "__main__":
