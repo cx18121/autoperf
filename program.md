@@ -2,49 +2,64 @@
 
 ## Goal
 
-Optimize `normalize_rows()` in `optimize.py` to run as fast as possible on
-macOS Apple Silicon (M-series). The function normalizes each row of a 1000x1000
-float64 matrix to unit L2 norm.
+Optimize the `choose_move()` function in `bot.py` to achieve the highest
+possible average score in 2048, played over 20 seeded games.
 
 ## What you can modify
 
-- **optimize.py** — the only file you may change. Rewrite freely.
+- **bot.py** — the only file you may change. Rewrite freely.
 
 ## What you cannot modify
 
+- **game.py** — the 2048 engine. Locked. Do not touch.
 - **evaluate.py** — the benchmark harness. Locked. Do not touch.
-- **Function signature** — `def normalize_rows(matrix: np.ndarray) -> np.ndarray`
+- **Function signature** — `def choose_move(board: np.ndarray) -> str`
   must remain exactly as-is.
-- **Correctness** — output must match the reference within atol=1e-6.
+- **Return value** — must be one of: "up", "down", "left", "right"
 
 ## Allowed libraries
 
-- `numpy` and `scipy` only.
-- No `numba`, `cython`, `ctypes`, or compiled extensions.
+- `numpy` only (already available via game.py).
+- No external packages, no machine learning, no precomputed lookup tables.
 
 ## Strategy guidance
 
 Focus areas, roughly in order of expected impact:
 
-1. **Vectorize** — replace Python loops with numpy operations.
-2. **Use built-in functions** — `np.linalg.norm`, broadcasting, in-place ops.
-3. **Memory layout** — contiguous arrays, avoid unnecessary copies.
-4. **Dtype optimization** — float32 if precision allows, cache-friendly access.
-5. **scipy routines** — `scipy.linalg` BLAS wrappers if applicable.
-6. **Reduce allocations** — reuse buffers, in-place division.
+1. **Corner strategy** — keep the highest tile in a corner.
+2. **Monotonicity** — prefer boards where rows/columns are sorted.
+3. **Empty tiles** — more empty cells = more flexibility.
+4. **Merge potential** — favor moves that create adjacent equal tiles.
+5. **Lookahead** — simulate moves 1-3 steps ahead, pick the best.
+6. **Weighted scoring** — combine multiple heuristics with tunable weights.
+7. **Snake pattern** — arrange tiles in a zigzag for optimal merging.
+
+## Available game API
+
+```python
+from game import move, is_game_over, MOVES
+
+# Simulate a move without modifying the board:
+new_board, score_gained, changed = move(board, "left")
+
+# Check if game is over:
+game_over = is_game_over(board)
+
+# Available moves:
+MOVES = ["up", "down", "left", "right"]
+```
 
 ## Simplicity rule
 
-Do not keep changes that add complexity without meaningful speedup (<1%).
-Simpler code that is equally fast always wins. If two approaches tie, pick
-the one with fewer lines.
+Prefer simpler heuristics that score well over complex ones that score
+marginally better. If two approaches tie, pick the one with fewer lines.
 
 ## What NOT to try
 
-- GPU / CUDA — not available.
-- Numba JIT — not allowed.
-- Multiprocessing — overhead exceeds gain at this matrix size.
-- C extensions or ctypes.
+- Machine learning or neural networks.
+- Precomputed lookup tables or bitboard tricks.
+- External packages beyond numpy.
+- Multiprocessing.
 
 ## Experiment discipline
 

@@ -1,4 +1,4 @@
-"""Autoperf agent loop — optimizes optimize.py using Ollama."""
+"""Autoperf agent loop — optimizes bot.py using Ollama."""
 
 import re, csv, subprocess, sys, json
 from pathlib import Path
@@ -6,8 +6,8 @@ from urllib.request import urlopen, Request
 
 MODEL = "deepseek-coder:33b"
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MAX_ITERATIONS = 100
-OPTIMIZE_FILE = Path("optimize.py")
+MAX_ITERATIONS = 20
+BOT_FILE = Path("bot.py")
 RESULTS_FILE = Path("results.tsv")
 PROGRAM_FILE = Path("program.md")
 ROOT = Path(__file__).parent
@@ -18,10 +18,10 @@ def git(*args: str) -> str:
 
 
 def run_benchmark() -> float:
-    """Run evaluate.py and return best time in ms, or -1 on failure."""
+    """Run evaluate.py and return average score, or -1 on failure."""
     try:
         r = subprocess.run([sys.executable, "evaluate.py"], capture_output=True,
-                           text=True, timeout=300, cwd=ROOT)
+                           text=True, timeout=600, cwd=ROOT)
         if r.returncode != 0:
             print(f"  Benchmark failed: {r.stderr.strip()}")
             return -1.0
@@ -41,9 +41,9 @@ def get_history(n: int = 10) -> str:
     return lines[0] + "\n" + "\n".join(tail)
 
 
-def log_result(attempt: int, ms: float, delta: float, status: str, summary: str) -> None:
+def log_result(attempt: int, score: float, delta: float, status: str, summary: str) -> None:
     with open(RESULTS_FILE, "a", newline="") as f:
-        csv.writer(f, delimiter="\t").writerow([attempt, f"{ms:.4f}", f"{delta:.4f}", status, summary])
+        csv.writer(f, delimiter="\t").writerow([attempt, f"{score:.1f}", f"{delta:+.1f}", status, summary])
 
 
 def extract_code(response: str) -> str | None:
@@ -56,19 +56,19 @@ def extract_code(response: str) -> str | None:
 
 def first_comment(code: str) -> str:
     for line in code.split("\n"):
-        if line.strip().startswith("#") and "normalize" not in line.lower():
+        if line.strip().startswith("#") and "choose" not in line.lower():
             return line.strip("# ").strip()
     return ""
 
 
-def build_prompt(code: str, best_ms: float, history: str) -> str:
+def build_prompt(code: str, best_score: float, history: str) -> str:
     program = PROGRAM_FILE.read_text() if PROGRAM_FILE.exists() else ""
-    return f"""You are an expert Python performance engineer optimizing optimize.py.
+    return f"""You are an expert 2048 AI developer optimizing bot.py.
 
 ## Research Program
 {program}
 
-## Current optimize.py
+## Current bot.py
 ```python
 {code}
 ```
@@ -76,71 +76,72 @@ def build_prompt(code: str, best_ms: float, history: str) -> str:
 ## Performance History (last 10 attempts)
 {history}
 
-## Current Best: {best_ms:.4f} ms
+## Current Best: {best_score:.1f} avg score
 
 ## Rules
-- Return ONLY the complete new optimize.py in ```python ... ```.
-- Signature must stay: def normalize_rows(matrix: np.ndarray) -> np.ndarray
-- Output must match reference (atol=1e-6). Allowed: numpy, scipy only.
-- Target: macOS Apple Silicon. Focus on vectorization, dtype, memory layout.
+- Return ONLY the complete new bot.py in ```python ... ```.
+- Signature must stay: def choose_move(board: np.ndarray) -> str
+- Must return one of: "up", "down", "left", "right"
+- Allowed imports: numpy, game (for move/is_game_over/MOVES). Nothing else.
 - ONE improvement per iteration. Don't repeat reverted approaches.
+- Higher score is better. The bot plays 20 seeded games.
 """
 
 
 def main() -> None:
     if not RESULTS_FILE.exists():
-        RESULTS_FILE.write_text("attempt\tms\tdelta\tstatus\tsummary\n")
+        RESULTS_FILE.write_text("attempt\tscore\tdelta\tstatus\tsummary\n")
 
     print("Running baseline benchmark...")
-    best_ms = run_benchmark()
-    if best_ms < 0:
-        sys.exit("Baseline failed. Check optimize.py.")
-    print(f"Baseline: {best_ms:.4f} ms")
-    log_result(0, best_ms, 0.0, "baseline", "initial naive implementation")
+    best_score = run_benchmark()
+    if best_score < 0:
+        sys.exit("Baseline failed. Check bot.py.")
+    print(f"Baseline: {best_score:.1f} avg score")
+    log_result(0, best_score, 0.0, "baseline", "random move selection")
 
     for attempt in range(1, MAX_ITERATIONS + 1):
         print(f"\n{'='*60}\nAttempt {attempt}/{MAX_ITERATIONS}\n{'='*60}")
-        current_code = OPTIMIZE_FILE.read_text()
+        current_code = BOT_FILE.read_text()
 
         print(f"  Asking {MODEL}...")
-        prompt = build_prompt(current_code, best_ms, get_history())
+        prompt = build_prompt(current_code, best_score, get_history())
         req = Request(OLLAMA_URL, method="POST",
                       data=json.dumps({"model": MODEL, "prompt": prompt, "stream": False}).encode(),
                       headers={"Content-Type": "application/json"})
-        with urlopen(req, timeout=300) as resp:
+        with urlopen(req, timeout=600) as resp:
             response_text = json.loads(resp.read())["response"]
         new_code = extract_code(response_text)
         if not new_code:
             print("  Could not extract code. Skipping.")
-            log_result(attempt, best_ms, 0.0, "skip", "failed to extract code")
+            log_result(attempt, best_score, 0.0, "skip", "failed to extract code")
             continue
 
-        OPTIMIZE_FILE.write_text(new_code)
-        print("  Benchmarking...")
-        new_ms = run_benchmark()
+        BOT_FILE.write_text(new_code)
+        print("  Benchmarking (20 games)...")
+        new_score = run_benchmark()
 
-        if new_ms < 0:
-            print("  REVERT: crashed or incorrect")
-            OPTIMIZE_FILE.write_text(current_code)
-            log_result(attempt, best_ms, 0.0, "revert", "crashed or incorrect output")
+        if new_score < 0:
+            print("  REVERT: crashed or invalid")
+            BOT_FILE.write_text(current_code)
+            log_result(attempt, best_score, 0.0, "revert", "crashed or invalid")
             continue
 
-        delta = new_ms - best_ms
-        pct = (delta / best_ms) * 100
-        summary = first_comment(new_code) or "optimization attempt"
+        delta = new_score - best_score
+        pct = (delta / max(best_score, 1)) * 100
+        summary = first_comment(new_code) or "strategy attempt"
 
-        if new_ms < best_ms:
-            print(f"  COMMIT: {new_ms:.4f} ms ({pct:+.2f}%)")
-            git("add", "optimize.py")
-            git("commit", "-m", f"perf: {new_ms:.4f}ms ({pct:+.1f}%) — {summary}")
-            best_ms = new_ms
-            log_result(attempt, new_ms, delta, "commit", summary)
+        if new_score > best_score:
+            print(f"  COMMIT: {new_score:.1f} avg ({pct:+.1f}%)")
+            git("add", "bot.py")
+            git("commit", "-m", f"score: {new_score:.0f} avg ({pct:+.1f}%) — {summary}")
+            best_score = new_score
+            log_result(attempt, new_score, delta, "commit", summary)
         else:
-            print(f"  REVERT: {new_ms:.4f} ms ({pct:+.2f}%)")
-            OPTIMIZE_FILE.write_text(current_code)
-            log_result(attempt, new_ms, delta, "revert", summary)
+            print(f"  REVERT: {new_score:.1f} avg ({pct:+.1f}%) — not better")
+            BOT_FILE.write_text(current_code)
+            log_result(attempt, new_score, delta, "revert", summary)
 
-    print(f"\nDone. Best: {best_ms:.4f} ms — see {RESULTS_FILE}")
+    print(f"\nDone. Best: {best_score:.1f} avg score — see {RESULTS_FILE}")
 
 
 if __name__ == "__main__":
