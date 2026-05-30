@@ -51,16 +51,16 @@ python play.py
 
 ## Training details
 
-- **Architecture:** 2-layer CNN (64→128 filters) + 256-unit FC
-- **State:** 4x4 board, log2-normalized to [0, 1]
-- **Reward:** Score gained per move (merge values)
+- **Architecture:** 2-layer CNN (64→128 filters) + 256-unit FC, Double DQN
+- **State:** 16-channel one-hot board (one plane per tile value)
+- **Reward:** log2 of the merge score per move, masked to valid moves
 - **Exploration:** Epsilon-greedy, 1.0 → 0.01 over 5000 episodes
 - **Hardware:** Runs on MPS (Apple Silicon) or CPU
 
 ## Results
 
-Measured over 30 evaluation games with the bundled `checkpoints/best.pt`
-(single-channel encoding, ~19k episodes of training):
+Baseline, measured over 30 evaluation games with the earlier **single-channel**
+model (~19k episodes; weights archived under `checkpoints/_singlechannel_bak/`):
 
 | Metric | Value |
 |--------|-------|
@@ -68,6 +68,6 @@ Measured over 30 evaluation games with the bundled `checkpoints/best.pt`
 | Best single-game score | ~6,700 |
 | Max tile reached | 512 (half of games stall at 128) |
 
-These are the honest baseline numbers. The one-hot encoding + Double-DQN
-setup (see `model.py` / `train.py`) is aimed at pushing the max tile higher,
-but needs a full retrain to benchmark.
+These are the honest baseline numbers. The current one-hot + Double-DQN setup
+changes the model's input shape, so the old weights don't load — run
+`python train.py` to train and benchmark it from scratch.

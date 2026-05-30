@@ -1,5 +1,7 @@
 """Fast 2048 game engine for RL training."""
 
+import math
+
 import numpy as np
 
 MOVES = [0, 1, 2, 3]  # up, down, left, right
@@ -87,7 +89,9 @@ class Game2048:
         self._spawn()
 
         done = self.is_game_over()
-        reward = float(gained) if gained > 0 else 0.1  # small reward for valid moves
+        # Log-scale the merge reward: raw merge scores reach the thousands,
+        # which blows up the Q-value targets and destabilizes training.
+        reward = math.log2(gained) if gained > 0 else 0.01
         return self._get_state(), reward, done
 
     def is_game_over(self):
@@ -103,12 +107,20 @@ class Game2048:
         return [d for d in MOVES if self._move(d)[2]]
 
     def _get_state(self):
-        """Return board as normalized float state for the neural net.
-        Uses log2 encoding: 0->0, 2->1, 4->2, ..., 2048->11, normalized to [0,1]."""
-        state = np.zeros((4, 4), dtype=np.float32)
-        mask = self.board > 0
-        state[mask] = np.log2(self.board[mask])
-        return state / 17.0  # max possible tile is 2^17=131072
+        """Return the board as a one-hot tensor for the neural net.
+
+        Shape (16, 4, 4): channel c is 1 where a cell holds tile 2**c, with
+        channel 0 marking empty cells. Tiles above 2**15 are clipped to 2**15.
+        One plane per tile value lets the conv net learn value-specific spatial
+        structure that a single normalized channel can't express."""
+        exps = np.zeros((4, 4), dtype=np.int64)
+        nonzero = self.board > 0
+        exps[nonzero] = np.log2(self.board[nonzero]).astype(np.int64)
+        np.clip(exps, 0, 15, out=exps)
+        state = np.zeros((16, 4, 4), dtype=np.float32)
+        rows, cols = np.indices((4, 4))
+        state[exps, rows, cols] = 1.0
+        return state
 
     def max_tile(self):
         return int(np.max(self.board))

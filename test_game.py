@@ -7,6 +7,8 @@ scoring, and game-over detection. They intentionally do NOT depend on the
 state encoding or reward shaping, so they stay valid as those evolve.
 """
 
+import math
+
 import numpy as np
 
 from game import slide_row_left, Game2048
@@ -96,6 +98,52 @@ def test_reset_spawns_exactly_two_tiles():
     g = Game2048()
     g.reset()
     assert np.count_nonzero(g.board) == 2
+
+
+def test_state_shape_is_16_channels():
+    g = Game2048()
+    assert g._get_state().shape == (16, 4, 4)
+
+
+def test_state_is_one_hot_per_cell():
+    # Every cell must activate exactly one channel (its tile value, or empty).
+    g = Game2048()
+    g.board = _board([[0, 2, 4, 8], [16, 32, 64, 128], [256, 512, 1024, 2048], [2, 4, 8, 16]])
+    state = g._get_state()
+    assert np.array_equal(state.sum(axis=0), np.ones((4, 4)))
+
+
+def test_empty_cells_land_in_channel_zero():
+    g = Game2048()
+    g.board = np.zeros((4, 4), dtype=np.int32)
+    state = g._get_state()
+    assert np.array_equal(state[0], np.ones((4, 4)))
+    assert state[1:].sum() == 0
+
+
+def test_tile_maps_to_log2_channel():
+    g = Game2048()
+    g.board = np.zeros((4, 4), dtype=np.int32)
+    g.board[1, 2] = 8  # 2**3
+    state = g._get_state()
+    assert state[3, 1, 2] == 1.0
+    assert state[0, 1, 2] == 0.0  # that cell is no longer "empty"
+
+
+def test_reward_is_log2_of_merge_score():
+    g = Game2048()
+    g.board = _board([[2, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+    _, reward, _ = g.step(2)  # left: merges 2+2 -> 4, gained == 4
+    assert reward == math.log2(4)  # == 2.0
+
+
+def test_invalid_move_is_penalized():
+    g = Game2048()
+    g.board = _board([[2, 4, 8, 16], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+    before = g.board.copy()
+    _, reward, _ = g.step(2)  # left changes nothing -> invalid
+    assert reward == -1.0
+    assert np.array_equal(g.board, before)
 
 
 if __name__ == "__main__":

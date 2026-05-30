@@ -31,22 +31,31 @@ class ReplayBuffer:
     def __init__(self, capacity):
         self.buffer = deque(maxlen=capacity)
 
-    def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+    def push(self, state, action, reward, next_state, done, next_valid_mask):
+        self.buffer.append((state, action, reward, next_state, done, next_valid_mask))
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
+        states, actions, rewards, next_states, dones, next_masks = zip(*batch)
         return (
             torch.FloatTensor(np.array(states)).to(DEVICE),
             torch.LongTensor(actions).to(DEVICE),
             torch.FloatTensor(rewards).to(DEVICE),
             torch.FloatTensor(np.array(next_states)).to(DEVICE),
             torch.BoolTensor(dones).to(DEVICE),
+            torch.BoolTensor(np.array(next_masks)).to(DEVICE),
         )
 
     def __len__(self):
         return len(self.buffer)
+
+
+def moves_to_mask(valid_moves):
+    """Convert a list of valid move indices to a length-4 boolean mask."""
+    mask = np.zeros(4, dtype=bool)
+    for m in valid_moves:
+        mask[m] = True
+    return mask
 
 
 def get_epsilon(episode):
@@ -126,28 +135,30 @@ def train():
 
     for episode in range(start_episode, end_episode + 1):
         state = game.reset()
+        valid = game.get_valid_moves()
         epsilon = get_epsilon(episode)
 
-        while not game.is_game_over():
-            valid = game.get_valid_moves()
-            if not valid:
-                break
-
+        while valid:
             action = select_action(policy_net, state, epsilon, valid)
             next_state, reward, done = game.step(action)
-            memory.push(state, action, reward, next_state, done)
-            state = next_state
+            next_valid = game.get_valid_moves()
+            memory.push(state, action, reward, next_state, done, moves_to_mask(next_valid))
+            state, valid = next_state, next_valid
 
             # Train on a batch
             if len(memory) >= BATCH_SIZE:
-                states, actions, rewards, next_states, dones = memory.sample(BATCH_SIZE)
+                states, actions, rewards, next_states, dones, next_masks = memory.sample(BATCH_SIZE)
 
                 # Q(s, a)
-                q_values = policy_net(states).gather(1, actions.unsqueeze(1)).squeeze()
+                q_values = policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
-                # max Q(s', a') from target net
+                # Double DQN: the policy net picks the next action, the target
+                # net scores it. Invalid next-state moves are masked out so we
+                # never bootstrap from a move the agent could not take.
                 with torch.no_grad():
-                    next_q = target_net(next_states).max(1)[0]
+                    next_q_policy = policy_net(next_states).masked_fill(~next_masks, float("-inf"))
+                    next_actions = next_q_policy.argmax(1, keepdim=True)
+                    next_q = target_net(next_states).gather(1, next_actions).squeeze(1)
                     next_q[dones] = 0.0
                 target = rewards + GAMMA * next_q
 
