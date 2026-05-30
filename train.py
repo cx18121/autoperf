@@ -101,8 +101,13 @@ def train():
     best_avg = 0
     start_episode = 1
 
-    # Resume from latest checkpoint if available
-    checkpoints = sorted(MODEL_PATH.glob("checkpoint_*.pt"))
+    # Resume from latest checkpoint if available. Sort by the episode number,
+    # not lexicographically — otherwise "checkpoint_9000" sorts after
+    # "checkpoint_19000" and we'd resume from the wrong (earlier) checkpoint.
+    checkpoints = sorted(
+        MODEL_PATH.glob("checkpoint_*.pt"),
+        key=lambda p: int(p.stem.split("_")[1]),
+    )
     if checkpoints:
         ckpt = torch.load(checkpoints[-1], map_location=DEVICE, weights_only=False)
         policy_net.load_state_dict(ckpt["model"])
