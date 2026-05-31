@@ -59,15 +59,18 @@ python play.py
 
 ## Results
 
-Baseline, measured over 30 evaluation games with the earlier **single-channel**
-model (~19k episodes; weights archived under `checkpoints/_singlechannel_bak/`):
+Both models evaluated with `evaluate.py` (greedy play). The current model
+(one-hot + Double DQN) was trained for 10k episodes; the baseline is the earlier
+single-channel model, archived under `checkpoints/_singlechannel_bak/`.
 
-| Metric | Value |
-|--------|-------|
-| Avg score | ~2,450 |
-| Best single-game score | ~6,700 |
-| Max tile reached | 512 (half of games stall at 128) |
+| Metric | Single-channel (30 games) | One-hot + Double DQN (100 games) |
+|--------|---------------------------|----------------------------------|
+| Avg score | ~2,450 | **~3,540** |
+| Best single-game score | ~6,740 | **~10,900** |
+| Avg max tile | ~200 | **~283** |
+| Reached 512 or higher | 13% of games | **21%** (and 1024 in 2%) |
 
-These are the honest baseline numbers. The current one-hot + Double-DQN setup
-changes the model's input shape, so the old weights don't load — run
-`python train.py` to train and benchmark it from scratch.
+The encoding + reward + Double-DQN changes raised the average score ~44%
+(2,450 -> 3,540) and the best single game to ~10,900, lifted the share of games
+reaching 512+ from 13% to 21%, and the agent now reaches 1024 occasionally (2%).
+Reproduce with `python train.py`, then `python evaluate.py checkpoints/best.pt 100`.
