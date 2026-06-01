@@ -49,6 +49,33 @@ python play.py
 | `evaluate.py` | Benchmark over N games with stats |
 | `play.py` | Watch the bot play in terminal |
 
+## Bot optimizer (LLM-driven)
+
+Beyond the DQN, the `optimizer/` package searches for a strong *handwritten*
+heuristic bot. A local LLM (via Ollama) repeatedly mutates a `choose_move(board)`
+function; each candidate plays seeded games and the best is kept via beam search
+with a holdout-confirmed promotion gate (so the saved best never regresses).
+
+```bash
+# one-time setup (macOS; see https://ollama.com/download for Linux)
+brew install ollama && ollama serve &
+ollama pull qwen2.5-coder:7b
+
+python -m optimizer.optimize                                # run the loop
+python -m optimizer.optimize --benchmark output/best_bot.py # score a bot (holdout)
+```
+
+The optimizer can also reuse any OpenAI-compatible server you already run
+(e.g. an LM Studio / llama.cpp `llama-server`) instead of Ollama:
+
+```bash
+LLM_BACKEND=openai OPENAI_BASE=http://localhost:11434/v1 MODEL=<served-model> \
+  python -m optimizer.optimize
+```
+
+The winning bot is written to `output/best_bot.py` (gitignored). Design and
+rationale: `docs/superpowers/specs/2026-05-31-2048-bot-optimizer-design.md`.
+
 ## Training details
 
 - **Architecture:** 2-layer CNN (64→128 filters) + 256-unit FC, Double DQN
@@ -74,3 +101,11 @@ The encoding + reward + Double-DQN changes raised the average score ~44%
 (2,450 -> 3,540) and the best single game to ~10,900, lifted the share of games
 reaching 512+ from 13% to 21%, and the agent now reaches 1024 occasionally (2%).
 Reproduce with `python train.py`, then `python evaluate.py checkpoints/best.pt 100`.
+
+## Credits
+
+- Inspired by [autoresearch](https://github.com/karpathy/autoresearch) by
+  Andrej Karpathy.
+- The bot optimizer uses a local model via [Ollama](https://ollama.com)
+  (default `qwen2.5-coder:7b`) or any OpenAI-compatible server — no API key
+  needed.
